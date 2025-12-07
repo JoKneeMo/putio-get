@@ -1,7 +1,11 @@
 # Putio-Get
 A downloader for content stored in put.io.
+
 It allows you to sync a put.io directory locally when new files are added.
 
+This was created for my own purposes, it's not perfect, but it works for MY needs.
+
+Available on Docker Hub: https://hub.docker.com/r/jokneemo/putio-get
 
 **This is not affiliated with nor supported by put.io**
 
