@@ -8,23 +8,34 @@ if [ ! -d "${PUTIO_TARGET}" ]; then
     exit 1
 fi
 
-if [ -z "${PUTIO_USERNAME}" ]; then
-    echo -e "\nERROR: PUTIO_USERNAME is not set."
+if [ -z "${PUTIO_USERNAME}" ] && [ -z "${PUTIO_USERNAME_FILE}" ]; then
+    echo -e "\nERROR: PUTIO_USERNAME or PUTIO_USERNAME_FILE is not set."
     exit 1
 fi
 
-if [ -z "${PUTIO_PASSWORD}" ]; then
-    echo -e "\nERROR: PUTIO_PASSWORD is not set."
+if [ -z "${PUTIO_PASSWORD}" ] && [ -z "${PUTIO_PASSWORD_FILE}" ]; then
+    echo -e "\nERROR: PUTIO_PASSWORD or PUTIO_PASSWORD_FILE is not set."
     exit 1
 fi
 
 ##### Write Secrets #####
 write_secrets() {
+    if [ -n "${PUTIO_USERNAME_FILE}" ]; then
+        local PUTIO_USERNAME=$(cat "${PUTIO_USERNAME_FILE}")
+    fi
+
+    if [ -n "${PUTIO_PASSWORD_FILE}" ]; then
+        local PUTIO_PASSWORD=$(cat "${PUTIO_PASSWORD_FILE}")
+    fi
+
     mkdir -p /etc/davfs2
     echo -e "${PUTIO_DOMAIN}\t${PUTIO_USERNAME}\t${PUTIO_PASSWORD}" > /etc/davfs2/secrets
     chmod 600 /etc/davfs2/secrets
     chown root:root /etc/davfs2/secrets
     unset PUTIO_PASSWORD
+    unset PUTIO_USERNAME
+    unset PUTIO_USERNAME_FILE
+    unset PUTIO_PASSWORD_FILE
 }
 
 ##### Write Config #####

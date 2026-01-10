@@ -1,0 +1,30 @@
+services:
+  putio-get:
+    image: jokneemo/putio-get:latest
+    restart: unless-stopped
+    privileged: true
+    tty: true
+    devices:
+      - "/dev/fuse:/dev/fuse"
+    #secrets:
+    #  - putio-username
+    #  - putio-password
+    volumes:
+      - ./my-media-nas:/target
+    environment:
+      # See README for more options
+      # App Settings
+      PUTIO_USERNAME: yourgenericusername
+      PUTIO_PASSWORD: your-super-secret-password-or-app-password
+      #PUTIO_USERNAME_FILE: /run/secrets/putio-username
+      #PUTIO_PASSWORD_FILE: /run/secrets/putio-password
+      PUTIO_SYNC_ACTION: move
+      PUTIO_GUESSIT: true
+      # DAV Settings
+      DAV_MAP: "/Videos:/Videos,/Comics:/Literature/Comics"
+
+#secrets:
+#  putio-username:
+#    file: ./secrets/putio-username
+#  putio-password:
+#    file: ./secrets/putio-password

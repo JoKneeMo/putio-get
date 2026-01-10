@@ -9,31 +9,26 @@ import signal
 import threading
 from pathlib import Path
 import argparse
+from rich_argparse import RichHelpFormatter
 from guessit import guessit
-
-try:
-    from tqdm.auto import tqdm
-except ImportError:
-    print("Warning: 'tqdm' library not found. Progress bars will not be shown.")
-    print("Install it with: pip install tqdm")
-    # Define a dummy tqdm class if it's not available
-    class tqdm:
-        def __init__(self, *args, **kwargs):
-            self.iterable = args[0] if args else None
-        def __iter__(self):
-            return iter(self.iterable)
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            pass
-        def update(self, *args):
-            pass
-
+import logging
+from rich.console import Console
+from rich.logging import RichHandler
+from rich.progress import (
+    Progress,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+    DownloadColumn
+)
+from rich.traceback import install
 
 
 # --- Argparse for CLI Arguments ---
 def get_args():
-    parser = argparse.ArgumentParser(description="putio-get sync script")
+    parser = argparse.ArgumentParser(description="putio-get sync script", formatter_class=RichHelpFormatter)
     parser.add_argument('--mountpoint', type=str, default=os.environ.get('DAV_MOUNT', '/dav'), help='DAV mountpoint')
     parser.add_argument('--target', type=str, default=os.environ.get('PUTIO_TARGET', '/target'), help='Target directory')
     parser.add_argument('--map', type=str, default=os.environ.get('DAV_MAP', ''), help='Sync map (source:target pairs)')
@@ -42,7 +37,7 @@ def get_args():
     parser.add_argument('--skip-existing', action='store_true', default=os.environ.get('PUTIO_SKIP_EXISTING', 'false').lower() == 'true', help='Skip existing files in source (default: False) when the loop starts')
     parser.add_argument('--poll-interval', type=int, default=int(os.environ.get('PUTIO_POLL_INTERVAL_SECONDS', 300)), help='Polling interval in seconds')
     parser.add_argument('--filetypes', type=str, default=os.environ.get('PUTIO_FILETYPES', ''), help='Comma-separated list of allowed file extensions (e.g., mkv,mp4)')
-    parser.add_argument('--debug', action='store_true', default=os.environ.get('PUTIO_DEBUG', 'false').lower() == 'true', help='Enable debug logging')
+    parser.add_argument('--log-level', type=str.upper, choices=['TRACE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], default=os.environ.get('LOG_LEVEL', 'INFO').upper(), help='Logging level')
     return parser.parse_args()
 
 # --- Configuration from Arguments/Environment Variables ---
@@ -54,7 +49,49 @@ PUTIO_SYNC_ACTION = args.action
 DAV_MAP = args.map
 PUTIO_GUESSIT = args.guessit
 PUTIO_SKIP_EXISTING = args.skip_existing
-PUTIO_DEBUG = args.debug
+LOG_LEVEL = args.log_level
+
+# Configure Logging and output
+lib_loggers = ["guessit", "rebulk"]
+install(show_locals=True, suppress=[lib_loggers])
+console = Console()
+
+## Add TRACE level
+logging.addLevelName(5, "TRACE")
+logging.TRACE = 5
+
+def trace(self, message, *args, **kwargs):
+    if self.isEnabledFor(5):
+        self._log(5, message, args, **kwargs)
+
+logging.Logger.trace = trace
+
+## Configure Library Logging
+class TraceLabelFilter(logging.Filter):
+    def filter(self, record):
+        # Relabels DEBUG logs from libraries to TRACE level name for visual distinction
+        if record.levelno == logging.DEBUG and record.name.startswith(tuple(lib_loggers)):
+            record.levelname = "TRACE"
+            record.levelno = 5
+        return True
+
+rich_handler = RichHandler(rich_tracebacks=True, markup=True)
+if LOG_LEVEL == "TRACE":
+    rich_handler.addFilter(TraceLabelFilter())
+    for lib in lib_loggers:
+        logging.getLogger(lib).setLevel(logging.DEBUG)
+else:
+    for lib in lib_loggers:
+        logging.getLogger(lib).setLevel(logging.INFO)
+
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[rich_handler]
+)
+log = logging.getLogger("rich")
+
 
 # Processing Filetypes
 _default_exts = {
@@ -72,8 +109,7 @@ if args.filetypes:
 else:
     ALLOWED_EXTENSIONS = {f".{ext}" for ext in _default_exts}
 
-if PUTIO_DEBUG:
-    print(f"[DEBUG] Allowed extensions: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
+log.debug(f"Allowed extensions: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
 
 DAV_UID = int(os.environ.get('DAV_UID', 1000))
 DAV_GID = int(os.environ.get('DAV_GID', 1000))
@@ -89,8 +125,8 @@ exit_event = threading.Event()
 def signal_handler(signum, frame):
     """Signal handler that sets the exit_event when a signal is received."""
     signal_name = signal.Signals(signum).name
-    print(f"\nSignal {signal_name} ({signum}) received. Shutting down gracefully...")
-    print("Cancelling any active file operations. Please wait.")
+    console.print(f"\nSignal [bold red]{signal_name}[/bold red] ([bold yellow]{signum}[/bold yellow]) received. Shutting down gracefully...")
+    console.print("Cancelling any active file operations. Please wait.")
     exit_event.set()
 
 
@@ -103,7 +139,7 @@ def apply_permissions(path: Path, is_file: bool):
         if hasattr(os, 'chown'):
             os.chown(path, DAV_UID, DAV_GID)
     except Exception as e:
-        print(f"  [WARNING] Could not set permissions on {path}: {e}")
+        log.warning(f"Could not set permissions on {str(path)}: {e}")
 
 
 def parse_sync_map(sync_map_str: str) -> dict[Path, Path]:
@@ -112,12 +148,13 @@ def parse_sync_map(sync_map_str: str) -> dict[Path, Path]:
     """
     mappings = {}
     if not sync_map_str:
+        log.warning("No sync map provided. Skipping sync map parsing.")
         return mappings
 
     pairs = sync_map_str.split(',')
     for pair in pairs:
         if ':' not in pair:
-            print(f"  [WARNING] Invalid mapping pair, skipping: {pair}")
+            log.warning(f"Invalid mapping pair, skipping: {pair}")
             continue
         source_str, target_str = pair.split(':', 1)
         source = Path(source_str.strip().strip('/\\'))
@@ -148,34 +185,48 @@ def get_current_paths(directory: Path, mappings: dict[Path, Path]) -> set[Path]:
 
 def copy_with_progress(src_path: Path, dst_path: Path):
     """Copies a file from src_path to dst_path and displays a progress bar."""
+    if PUTIO_SYNC_ACTION == 'move':
+        action = 'Moving'
+    elif PUTIO_SYNC_ACTION == 'copy':
+        action = 'Copying'
+    else:
+        log.error(f"Invalid sync action: {PUTIO_SYNC_ACTION}")
+        return
+
     total_size = src_path.stat().st_size
-    desc = f"Copying {src_path.name}"
-    start_time = time.time()
-    last_report = start_time
-    bytes_copied = 0
+    desc = f"{action}: {dst_path.name}"
+    
+    progress = Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        DownloadColumn(),
+        TransferSpeedColumn(),
+        TimeRemainingColumn(),
+        transient=True,
+        refresh_per_second=1
+    )
+
     try:
-        with open(src_path, 'rb') as fsrc, open(dst_path, 'wb') as fdst:
-            while not exit_event.is_set():
-                buf = fsrc.read(1024 * 1024)
-                if not buf:
-                    break
-                fdst.write(buf)
-                bytes_copied += len(buf)
-                now = time.time()
-                if now - last_report >= 30 or bytes_copied == total_size:
-                    percent = (bytes_copied / total_size) * 100 if total_size else 0
-                    elapsed = now - start_time
-                    speed = bytes_copied / elapsed if elapsed > 0 else 0
-                    speed_str = f"{speed/1024/1024:.2f} MB/s" if speed else "N/A"
-                    print(f"  [PROGRESS] {desc}: {percent:.1f}% ({bytes_copied}/{total_size} bytes) at {speed_str}")
-                    sys.stdout.flush()
-                    last_report = now
+        with progress:
+            task = progress.add_task(desc, total=total_size)
+            with open(src_path, 'rb') as fsrc, open(dst_path, 'wb') as fdst:
+                bytes_copied = 0
+                while not exit_event.is_set():
+                    buf = fsrc.read(1024 * 1024)
+                    if not buf:
+                        break
+                    fdst.write(buf)
+                    bytes_copied += len(buf)
+                    progress.update(task, completed=bytes_copied)
+        
         if not exit_event.is_set():
             shutil.copystat(src_path, dst_path)
             apply_permissions(dst_path, is_file=True)
+            
     finally:
         if exit_event.is_set():
-            print(f"\n  -> Copy cancelled. Cleaning up partial file: {dst_path}")
+            log.warning(f"Copy cancelled. Cleaning up partial file: {str(dst_path)}")
             dst_path.unlink(missing_ok=True)
 
 
@@ -188,18 +239,17 @@ def move_with_progress(src_path: Path, dst_path: Path):
         apply_permissions(dst_path, is_file=True)
     except OSError:
         # Fallback for cross-device moves
-        print(f"  -> Performing cross-device move...")
+        console.print(f"  -> Performing cross-device move...")
         copy_with_progress(src_path, dst_path)
         if not exit_event.is_set():
             os.remove(src_path)
 
 def get_dest_path(base_path: Path, sub_path: Path):
-    if PUTIO_DEBUG:
-        print(f"  [DEBUG] Getting Destination Path: {sub_path}")
+    log.debug(f"Getting Destination Path: {str(sub_path)}")
     if PUTIO_GUESSIT:
-        guess = guessit(sub_path)
-        if PUTIO_DEBUG:
-            print(f"  [DEBUG] Guessit: {guess}")
+        guess = dict(guessit(str(sub_path)))
+        guess_str = str(guess)
+        log.debug(f"Guessit: {guess_str}")
         dest_path = base_path
         if guess['type'] == 'episode':
             series_path = f"{guess['title']} ({guess['year']})" if 'year' in guess else guess['title']
@@ -224,8 +274,8 @@ def get_dest_path(base_path: Path, sub_path: Path):
         dest_path = sub_path
     
     dest_path = Path(base_path, dest_path)
-    if PUTIO_DEBUG:
-        print(f"  [DEBUG] Setting Destination Path{(' (Guessit)' if PUTIO_GUESSIT else '')}: {dest_path}")
+    dest_path = Path(base_path, dest_path)
+    log.debug(f"Setting Destination Path{(' (Guessit)' if PUTIO_GUESSIT else '')}: {str(dest_path)}")
     return dest_path
 
 
@@ -233,23 +283,20 @@ def process_paths(paths, sync_mappings, label):
     """Process a set of paths (existing or new) according to sync settings."""
     moved_items = set()
     if paths:
-        print(f"\n--- {label} ---")
+        console.print(f"\n[blue][bold]---[/bold] {label} [bold]---[/blue]")
         for path in sorted(list(paths), key=lambda p: len(p.parts)):
             if exit_event.is_set(): break
             
-            if PUTIO_DEBUG:
-                print(f"  [DEBUG] Examining: {path}")
+            log.debug(f"Examining: {str(path)}")
 
             # We only process files. Directories are created on demand.
             if not path.is_file():
-                if PUTIO_DEBUG:
-                    print(f"  [DEBUG] Skipping directory (files only): {path}")
+                log.debug(f"Skipping directory (files only): {str(path)}")
                 continue
 
             # Filter by extension
             if path.suffix.lower() not in ALLOWED_EXTENSIONS:
-                if PUTIO_DEBUG:
-                    print(f"  [DEBUG] Skipping file (extension '{path.suffix.lower()}' not allowed): {path}")
+                log.debug(f"Skipping file (extension '{str(path.suffix.lower())}' not allowed): {str(path)}")
                 continue
 
             relative_path = path.relative_to(DAV_MOUNT)
@@ -277,7 +324,7 @@ def process_paths(paths, sync_mappings, label):
                         break
                     parent_dir = parent_dir.parent
                 
-                print(f"  [FILE] Found: {path}")
+                log.info(f"Found: {str(path)}")
                 if PUTIO_SYNC_ACTION == "copy":
                     copy_with_progress(path, destination_path)
                 elif PUTIO_SYNC_ACTION == "move":
@@ -285,11 +332,12 @@ def process_paths(paths, sync_mappings, label):
                     if not exit_event.is_set(): moved_items.add(path)
                 
                 if not exit_event.is_set():
-                    print(f"  -> Action complete for: {destination_path}")
+                    log.info(f"Action complete for: {str(destination_path)}")
+
             except FileNotFoundError:
-                print(f"  [WARNING] File '{path}' was deleted before it could be processed.")
+                log.warning(f"File '{str(path)}' was deleted before it could be processed.")
             except Exception as e:
-                print(f"  [ERROR] Could not process '{path}': {e}")
+                log.error(f"Could not process '{str(path)}': {e}")
     return moved_items
 
 def main():
@@ -303,29 +351,29 @@ def main():
 
     sync_mappings = parse_sync_map(DAV_MAP)
 
-    print(f"--- Directory Monitor Started ---")
+    console.print("\n[blue][bold]---[/bold] Directory Monitor Started [bold]---[/bold][/blue]")
     if sync_mappings:
-        print("Sync mappings are defined:")
+        console.print("Sync mappings are defined:")
         for src, dest in sync_mappings.items():
-            print(f"  - From: {DAV_MOUNT / src}")
-            print(f"    To:   {PUTIO_TARGET / dest}")
+            console.print(f"  - From: {DAV_MOUNT / src}")
+            console.print(f"    To:   {PUTIO_TARGET / dest}")
     else:
-        print("No sync mappings defined. Monitoring entire source directory.")
+        console.print("No sync mappings defined. Monitoring entire source directory.")
 
-    print(f"Source Directory: {DAV_MOUNT}")
-    print(f"Target Directory: {PUTIO_TARGET}")
-    print(f"Action on New Files: {PUTIO_SYNC_ACTION.upper()}")
-    print("Press Ctrl+C to stop.")
+    console.print(f"Source Directory: {DAV_MOUNT}")
+    console.print(f"Target Directory: {PUTIO_TARGET}")
+    console.print(f"Action on New Files: {PUTIO_SYNC_ACTION.upper()}")
+    console.print("\n[yellow]Press Ctrl+C to stop.[/yellow]\n")
 
     # --- Initial Setup ---
     if not DAV_MOUNT.is_dir():
-        print(f"Error: Source directory '{DAV_MOUNT}' does not exist. Exiting.")
+        log.error(f"Source directory '{DAV_MOUNT}' does not exist. Exiting.")
         return
     PUTIO_TARGET.mkdir(parents=True, exist_ok=True)
     apply_permissions(PUTIO_TARGET, is_file=False)
 
     known_paths = get_current_paths(DAV_MOUNT, sync_mappings)
-    print(f"Initial scan complete. Found {len(known_paths)} files and directories.")
+    log.info(f"Initial scan complete. Found {len(known_paths)} files and directories.")
 
     # --- Handle Existing Files at Startup ---
     if not PUTIO_SKIP_EXISTING:
@@ -346,16 +394,16 @@ def main():
 
             removed_paths = known_paths - current_paths
             if removed_paths:
-                print("\n--- Detected Removed Items ---")
+                log.debug("\n--- Detected Removed Items ---")
                 for path in removed_paths:
-                    print(f"  [REMOVED] {path}")
+                    log.debug(f"  [bold red][REMOVED][/bold red] {str(path)}")
 
             known_paths = current_paths - moved_items
 
     except Exception as e:
-        print(f"\n[CRITICAL] An unexpected error occurred: {e}")
+        log.critical(f"\nAn unexpected error occurred: {e}")
     finally:
-        print("\n--- Directory Monitor Stopped ---")
+        console.print("\n[blue][bold]---[/bold] Directory Monitor Stopped [bold]---[/bold][/blue]")
 
 if __name__ == "__main__":
     main()
