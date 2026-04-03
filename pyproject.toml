@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "putio-get"
+version = "2.0.0"
+description = "A downloader/sync tool for content stored in put.io"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "AGPL-3.0"
+authors = [
+    { name = "JokneeMo" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "guessit==3.8.0",
+    "rich==14.3.3",
+    "rich-argparse==1.7.2",
+    "aria2p==0.12.1",
+    "httpx==0.28.1",
+]
+
+[project.scripts]
+putio-get = "putio_get.cli:main"
+
+[project.urls]
+"Homepage" = "https://github.com/JoKneeMo/putio-get"
+"Documentation" = "https://github.com/JoKneeMo/putio-get/blob/main/README.md"
+"Repository" = "https://github.com/JoKneeMo/putio-get"
+"Issues" = "https://github.com/JoKneeMo/putio-get/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["putio_get"]
