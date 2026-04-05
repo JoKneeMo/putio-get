@@ -1,5 +1,5 @@
 import os
-import zlib
+import hashlib
 import logging
 import json
 from pathlib import Path
@@ -70,17 +70,16 @@ def apply_permissions(path: Path, is_file: bool, uid: int, gid: int, fmode: int,
         log.warning(f"Could not set permissions on {str(path)}: {e}")
 
 
-def verify_crc32(path: Path, expected_crc32: str) -> bool:
-    """Verifies the CRC32 checksum of a local file."""
+def verify_sha1(path: Path, expected_sha1: str) -> bool:
+    """Verifies the SHA-1 checksum of a local file."""
     try:
-        hash_func = zlib.crc32(b"")
+        h = hashlib.sha1()
         with open(path, 'rb') as f:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                hash_func = zlib.crc32(chunk, hash_func)
-        calculated = f"{hash_func & 0xFFFFFFFF:08x}"
-        return calculated.lower() == expected_crc32.lower()
+                h.update(chunk)
+        return h.hexdigest().lower() == expected_sha1.lower()
     except Exception as e:
-        log.error(f"Error checking local CRC32: {e}")
+        log.error(f"Error checking local SHA-1: {e}")
         return False
 
 

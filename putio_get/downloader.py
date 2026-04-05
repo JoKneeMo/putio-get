@@ -61,7 +61,7 @@ class Downloader:
                 )
             )
 
-    def download(self, url: str, dst_path: Path, file_size: int, exit_event, crc32: str = None) -> bool:
+    def download(self, url: str, dst_path: Path, file_size: int, exit_event, sha1: str = None) -> bool:
         segments = 1
         if file_size > 0:
             possible_segments = file_size // self.config.download['min_segment_size_bytes']
@@ -79,9 +79,9 @@ class Downloader:
             "allow-overwrite": "true"
         }
 
-        if crc32:
+        if sha1:
             options["check-integrity"] = "true"
-            options["checksum"] = f"crc32={crc32}"
+            options["checksum"] = f"sha-1={sha1}"
 
         try:
             # Aria2 returns GID or Download object depending on version/mock

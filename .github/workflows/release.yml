@@ -36,6 +36,8 @@ jobs:
 
   container:
     runs-on: ubuntu-latest
+    environment:
+      name: dockerbuild
     permissions:
        packages: write
        contents: read

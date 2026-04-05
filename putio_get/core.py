@@ -9,7 +9,7 @@ from rich.console import Console
 from .config import Config
 from .downloader import Downloader
 from .client import PutioClient
-from .utils import apply_permissions, verify_crc32
+from .utils import apply_permissions, verify_sha1
 
 log = logging.getLogger("rich")
 console = Console()
@@ -206,17 +206,17 @@ class Application:
                     continue
 
                 file_size = item['size']
-                crc32 = item.get('crc32')
+                sha1 = item.get('sha1')
 
                 success = False
-                if dest_path.exists() and crc32:
-                    log.info(f"File {dest_path.name} exists, verifying existing CRC32...")
-                    if verify_crc32(dest_path, crc32):
-                        log.info(f"CRC32 match for {dest_path.name}. Skipping download.")
+                if dest_path.exists() and sha1:
+                    log.info(f"File {dest_path.name} exists, verifying existing SHA-1...")
+                    if verify_sha1(dest_path, sha1):
+                        log.info(f"SHA-1 match for {dest_path.name}. Skipping download.")
                         success = True
 
                 if not success:
-                    success = self.downloader.download(url, dest_path, file_size, self.exit_event, crc32)
+                    success = self.downloader.download(url, dest_path, file_size, self.exit_event, sha1)
 
                 if success:
                     apply_permissions(dest_path, True,
