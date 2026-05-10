@@ -9,7 +9,7 @@ from rich.console import Console
 from .config import Config
 from .downloader import Downloader
 from .client import PutioClient
-from .utils import apply_permissions, verify_sha1
+from .utils import apply_permissions, verify_sha1, sanitize_filename
 
 log = logging.getLogger("rich")
 console = Console()
@@ -197,6 +197,7 @@ class Application:
 
             try:
                 item_path = self._get_dest_path(item['rel_path'])
+                item_path = Path(*[sanitize_filename(part) for part in item_path.parts])
                 dest_path = item['target_root'].joinpath(item_path)
                 self._ensure_dir(dest_path.parent)
 

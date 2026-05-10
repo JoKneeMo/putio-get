@@ -2,6 +2,7 @@ import os
 import hashlib
 import logging
 import json
+import re
 from pathlib import Path
 from rich.console import Console
 from rich.logging import RichHandler
@@ -56,6 +57,13 @@ def setup_logging(log_level: str):
 
 
 log = logging.getLogger("rich")
+
+
+def sanitize_filename(name: str) -> str:
+    """Removes or replaces characters that are illegal on Windows/NFS/SMB."""
+    if not name:
+        return name
+    return re.sub(r'[<>:"/\\|?*]', '', str(name))
 
 
 def apply_permissions(path: Path, is_file: bool, uid: int, gid: int, fmode: int, dmode: int):
